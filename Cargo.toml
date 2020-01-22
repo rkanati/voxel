@@ -1,0 +1,36 @@
+[package]
+name = "rk-voxel"
+version = "0.1.0"
+authors = ["Rachel K <raech.kanati@gmail.com>"]
+edition = "2018"
+
+[profile.dev]
+opt-level = 1
+lto = false
+debug = true
+panic = "unwind"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = false
+panic = "abort"
+
+[dependencies]
+glutin            = "0.22"
+gl                = "0.14"
+num-complex       = "0.2"
+#static_assertions = "1.1"
+#rgb               = "0.8"
+#alga              = "0.9"
+
+[dependencies.nalgebra]
+version = "0.19"
+default-features = false
+
+#[dependencies.image]
+#version = "0.22"
+#default-features = false
+#features = ["png_codec"]
+
