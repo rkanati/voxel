@@ -10,11 +10,17 @@ pub type V4<T = f32> = na::Vector4<T>;
 
 pub type P3<T = f32> = na::Point3<T>;
 
+pub type V2u8 = V2<u8>;
 pub type V3u8 = V3<u8>;
-pub type P3u8 = P3<u8>;
 pub type V4u8 = V4<u8>;
 
+pub type V3i8 = V3<i8>;
+
+pub type P3u8 = P3<u8>;
+
+pub type V2i32 = V2<i32>;
 pub type V3i32 = V3<i32>;
+
 pub type P3i32 = P3<i32>;
 
 pub type V3usize = V3<usize>;

@@ -21,16 +21,20 @@ panic = "abort"
 glutin            = "0.22"
 gl                = "0.14"
 num-complex       = "0.2"
+rgb               = "0.8"
 #static_assertions = "1.1"
-#rgb               = "0.8"
 #alga              = "0.9"
 
 [dependencies.nalgebra]
 version = "0.19"
 default-features = false
 
-#[dependencies.image]
-#version = "0.22"
-#default-features = false
-#features = ["png_codec"]
+[dependencies.noise]
+version = "0.6"
+default-features = false
+
+[dependencies.image]
+version = "0.22"
+default-features = false
+features = ["png_codec"]
 

@@ -2,7 +2,7 @@
 use {
     crate::{
         block::{self, Block},
-        chunk::{self, Chunk},
+        chunk::{self, Chunk, BlockCoords, Coords as ChunkCoords},
         chunk_maker,
         chunk_source,
         chunk_store,
@@ -10,11 +10,17 @@ use {
         mesher,
         shader,
         stage,
+        texture::Texture2D,
     },
     std::rc::Rc,
 };
 
-const STAGE_RADIUS: i32 = 4;
+const STAGE_RADIUS: i32 = 10;
+
+const FOV: f32 = 90.;
+const ZOOM_FACTOR: f32 = 5.;
+
+const SPRINT_FACTOR: f32 = 3.;
 
 #[derive(Clone)]
 struct StageChunk {
@@ -77,29 +83,6 @@ fn fill_meshing_buffer(buffer: &mut MeshingBuffer, stage: &Stage, rel: V3i32)
     Some(())
 }
 
-#[cfg(test)]
-#[test]
-fn test_fill_meshing_buffer() {
-    let chunk: Chunk = chunk::Array::new_filled(Block::Solid).into();
-    let chunk = StageChunk::new(chunk);
-
-    let mut stage = Stage::new(3, P3::origin());
-    let stale = stage.relocate(P3::origin());
-    for coords in stale {
-        stage.insert_absolute(coords, chunk.clone());
-    }
-
-    let mut meshing_buffer = MeshingBuffer::new_filled(Block::Empty);
-
-    let ok = fill_meshing_buffer(&mut meshing_buffer, &stage, V3::zeros());
-    assert!(ok.is_some());
-
-    let n_empty = meshing_buffer.iter()
-        .filter(|block| block.is_empty())
-        .count();
-    assert_eq!(n_empty, chunk::DIM as usize * 3 + 1);
-}
-
 #[derive(Clone, Copy)]
 pub struct Inputs {
     pub fore:  bool,
@@ -108,8 +91,10 @@ pub struct Inputs {
     pub right: bool,
     pub up:    bool,
     pub down:  bool,
+    pub fast:  bool,
 
     pub cam_delta: V2,
+    pub zoom:  bool,
 
     pub build: bool,
     pub smash: bool,
@@ -124,8 +109,10 @@ impl Inputs {
             right: false,
             up:    false,
             down:  false,
+            fast:  false,
 
             cam_delta: V2::zeros(),
+            zoom:      false,
 
             build: false,
             smash: false,
@@ -143,48 +130,102 @@ type MesherFn = dyn for<'a> FnMut(block::Slice<'a>) -> Rc<dyn mesher::Mesh>;
 
 type ChunkSource = chunk_source::Source<chunk_store::Null, chunk_maker::Test>;
 
+
+struct Facing {
+    pitch:  f32,
+    yaw:    Complex,
+    cached: std::cell::Cell<Option<(V2, V3)>>,
+}
+
+impl Facing {
+    fn new() -> Facing {
+        Facing {
+            pitch:  0.,
+            yaw:    Complex::new(0., 1.),
+            cached: None.into(),
+        }
+    }
+
+    fn get(&self) -> (V2, V3) {
+        if let Some(facing) = self.cached.get() {
+            return facing;
+        }
+
+        let flat = V2::new(self.yaw.re, self.yaw.im);
+        let (s, c) = self.pitch.sin_cos();
+        let facing = (c * flat).push(s);
+
+        let result = (flat, facing);
+        self.cached.set(Some(result));
+        result
+    }
+
+    fn flat(&self) -> V2 {
+        self.get().0
+    }
+
+    fn direction(&self) -> V3 {
+        self.get().1
+    }
+
+    fn update(&mut self, d_pitch: f32, d_yaw: f32) {
+        self.cached.set(None);
+
+        self.pitch = (self.pitch - d_pitch)
+            .min(PI *  0.45)
+            .max(PI * -0.45);
+
+        self.yaw *= Complex::from_polar(&1., &(-0.5 * d_yaw));
+    }
+}
+
 pub struct Game {
     source:   ChunkSource,
     stage:    Stage,
     mesher:   Box<MesherFn>,
     mesh_buf: MeshingBuffer,
-//  shader:   shader::Program,
+    atlas:    Texture2D,
 
     player_position: P3,
-    pitch: f32,
-    yaw:   Complex,
-    facing: V3,
+    player_facing:   Facing,
+    zoom:            bool,
+
+    selected_block:  BlockCoords,
 }
 
 impl Game {
     pub fn new() -> Result<Game, Box<dyn std::error::Error>> {
         let source = ChunkSource::new(
             chunk_store::Null::new(),
-            chunk_maker::Test::new()
+            chunk_maker::Test::new(12345)
         );
 
-        let stage = Stage::new(STAGE_RADIUS, P3::origin());
+        let stage = Stage::new(STAGE_RADIUS, ChunkCoords::origin());
 
         let mesher: Box<MesherFn> = {
             use mesher::Mesher;
             let mesher = mesher::Simple::new();
-            let mut builder = mesher::NaiveTriangleMeshBuilder::new();
+        //  let mut builder = mesher::NaiveTriangleMeshBuilder::new();
+            let mut builder = mesher::InstancedQuadMeshBuilder::new();
             Box::new(move |buffer| mesher.make_mesh(buffer, &mut builder))
         };
 
         let mesh_buf = MeshingBuffer::new_filled(Block::Empty);
 
         let shader = {
-            static V_SHADER_SRC: &'static str = include_str!("shader/test-v.glsl");
+        //  static V_SHADER_SRC: &'static str = include_str!("shader/test-v.glsl");
+            static V_SHADER_SRC: &'static str = include_str!("shader/instanced-quad-vert.glsl");
             static F_SHADER_SRC: &'static str = include_str!("shader/test-f.glsl");
             let v_shader = shader::compile(shader::Stage::Vertex,   V_SHADER_SRC)?;
             let f_shader = shader::compile(shader::Stage::Fragment, F_SHADER_SRC)?;
             shader::link(&[v_shader, f_shader])?
         };
 
+        let atlas = Texture2D::load("atlas.png")?;
+
         unsafe {
             shader.bind();
-            gl::ClearColor(0.0, 0.0, 0.0, 1.0);
+            gl::ClearColor(0.4, 0.6, 1.0, 1.0);
             gl::Enable(gl::CULL_FACE);
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
             gl::Enable(gl::BLEND);
@@ -197,59 +238,53 @@ impl Game {
             mesher,
             mesh_buf,
         //  shader,
+            atlas,
 
             player_position: P3::origin(),
-            pitch: 0.,
-            yaw: Complex::new(1., 0.),
-            facing: V3::zeros(), // TODO this sucks
+            player_facing:   Facing::new(),
+            zoom:            false,
+
+            selected_block: BlockCoords::origin(),
         };
 
         Ok(game)
     }
 
-    fn player_chunk_coords(&self) -> P3i32 {
-        self.player_position.coords
-            .map(|x| (x * (1. / chunk::DIM as f32)).floor() as i32)
-            .into()
+    fn player_chunk_coords(&self) -> ChunkCoords {
+        BlockCoords::containing(self.player_position)
+            .chunk()
+        //self.player_position.coords
+        //    .map(|x| (x * (1. / chunk::DIM as f32)).floor() as i32)
+        //    .into()
     }
 
     pub fn tick(&mut self, inputs: &Inputs, dt: f32) {
         const MOUSE_SPEED: f32 = 0.005;
-        self.pitch =
-            (self.pitch + inputs.cam_delta.y * MOUSE_SPEED)
-            .min(PI *  0.45)
-            .max(PI * -0.45);
-
-        self.yaw *= Complex::from_polar(&1., &(inputs.cam_delta.x * MOUSE_SPEED * -0.5));
-
+        let mouse_speed = MOUSE_SPEED * if inputs.zoom { 1. / ZOOM_FACTOR } else { 1. };
+        self.player_facing.update(
+            inputs.cam_delta.y * mouse_speed,
+            inputs.cam_delta.x * mouse_speed,
+        );
 
         let player_move = {
-            let yaw = self.yaw * self.yaw;
-            let move_fore  = V3::new(-yaw.im, yaw.re, 0.);
-            let move_right = V3::new( yaw.re, yaw.im, 0.);
+            let move_fore = self.player_facing.flat();
+            let move_right = V2::new(move_fore.y, -move_fore.x);
 
-            (inputs.fore  as i32 - inputs.back as i32) as f32 * move_fore +
-            (inputs.right as i32 - inputs.left as i32) as f32 * move_right +
+            (inputs.fore  as i32 - inputs.back as i32) as f32 * move_fore.push(0.) +
+            (inputs.right as i32 - inputs.left as i32) as f32 * move_right.push(0.) +
             (inputs.up    as i32 - inputs.down as i32) as f32 * V3::z()
         };
 
-        self.facing = {
-            let yaw = Versor::from_quaternion(
-                Quaternion::from_parts(self.yaw.re, self.yaw.im * V3::z())
-            );
-
-            type Vu3 = na::Unit<V3>;
-            let pitch = Versor::from_axis_angle(&Vu3::new_unchecked(V3::x()), -self.pitch);
-
-            (yaw * pitch).transform_vector(&V3::y())
-        };
-
         const SPEED: f32 = 5.;
-        self.player_position += dt * SPEED * player_move;
+        let speed = SPEED * if inputs.fast { SPRINT_FACTOR } else { 1. };
+        self.player_position += dt * speed * player_move;
 
         let stale_chunks = self.stage.relocate(self.player_chunk_coords());
         if !stale_chunks.is_empty() {
-            eprintln!("loading {} stale chunks...", stale_chunks.len());
+            //eprintln!("loading {} stale chunks...", stale_chunks.len());
+
+            const MAX_LOAD: usize = 10;
+            let mut load_count = 0;
 
             for stale_chunk in stale_chunks {
                 use stage::StaleChunk::*;
@@ -262,51 +297,51 @@ impl Game {
                     }
                 };
 
-                let chunk = self.source.load(coords);
-                let stage_chunk = StageChunk::new(chunk);
-                self.stage.insert_absolute(coords, stage_chunk);
+                if load_count < MAX_LOAD {
+                    let (chunk, from) = self.source.load(coords);
+                    let stage_chunk = StageChunk::new(chunk);
+                    self.stage.insert_absolute(coords, stage_chunk);
+                    if from == chunk_source::LoadedFrom::Maker {
+                        load_count += 1;
+                    }
+                }
             }
         }
 
+        let selected_position = self.player_position + self.player_facing.direction() * 3.;
+        self.selected_block = BlockCoords::containing(selected_position);
+        let (selected_chunk, selected_offset) = self.selected_block.chunk_and_offset();
+
         if inputs.build != inputs.smash {
-            let selected_position = self.player_position + self.facing * 3.;
-            let selected_block = selected_position.coords.map(|x| x.floor());
-            let selected_chunk = selected_block.map(|x| (x / chunk::DIM as f32).floor() as i32);
-            let selected_block = (selected_block.map(|x| x as i32) - selected_chunk * chunk::DIM)
-                .map(|x| x as usize);
-            let selected_chunk: P3i32 = selected_chunk.into();
             if let Some(chunk) = self.stage.at_absolute_mut(selected_chunk) {
-                dbg!(selected_chunk);
-                dbg!(selected_block);
-                chunk.chunk[selected_block] = if inputs.build {
-                    Block::Solid
-                }
-                else {
-                    Block::Empty
-                };
+                chunk.chunk[selected_offset] =
+                    if inputs.build { Block::Stone }
+                    else            { Block::Empty };
 
                 // TODO proper mesh invalidation
                 chunk.mesh = None;
 
-                if selected_block.x == 0 {
+                if selected_offset.x == 0 {
                     if let Some(chunk) = self.stage.at_absolute_mut(selected_chunk - V3::x()) {
                         chunk.mesh = None;
                     }
                 }
 
-                if selected_block.y == 0 {
+                if selected_offset.y == 0 {
                     if let Some(chunk) = self.stage.at_absolute_mut(selected_chunk - V3::y()) {
                         chunk.mesh = None;
                     }
                 }
 
-                if selected_block.z == 0 {
+                if selected_offset.z == 0 {
                     if let Some(chunk) = self.stage.at_absolute_mut(selected_chunk - V3::z()) {
                         chunk.mesh = None;
                     }
                 }
             }
         }
+
+        self.zoom = inputs.zoom;
     }
 
     fn refresh_meshes(&mut self) {
@@ -337,45 +372,58 @@ impl Game {
         self.refresh_meshes();
 
         let aspect = screen_dims.x / screen_dims.y;
-        let view_to_clip = Perspective::new(aspect, 90.0 * (PI / 180.0), 0.1, 1000.0);
 
-        let world_to_view = {
-            Motion::look_at_rh(
-                &self.player_position,
-                &(self.player_position + self.facing),
-                &V3::z()
-            ).to_homogeneous()
-            //let reference: Versor = Versor::face_towards(&V3::y(), &V3::z());
+        let fov = FOV * if self.zoom { 1. / ZOOM_FACTOR } else { 1. };
+        let view_to_clip = Perspective::new(aspect, fov * (PI / 180.0), 0.1, 1000.0);
 
-            //let translation = Translation::from(-self.player_position.coords);
-            //let rotation = reference * pitch * yaw;
+        let world_to_view = Motion::look_at_rh(
+            &self.player_position,
+            &(self.player_position + self.player_facing.direction()),
+            &V3::z()
+        ).to_homogeneous();
 
-            //rotation * translation
-        };
-
-        let world_to_clip = view_to_clip.as_matrix()
-                          * world_to_view;
+        let world_to_clip
+            = view_to_clip.as_matrix()
+            * world_to_view;
 
         unsafe {
             gl::Viewport(0, 0, screen_dims.x as i32, screen_dims.y as i32);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
         }
 
+        self.atlas.bind();
+
         for chunk_coords in self.stage.absolute_coords_iter() {
             if let Some(chunk) = self.stage.at_absolute(chunk_coords) {
                 if let Some(mesh) = &chunk.mesh {
                     let model_to_world = na::Translation::from(
-                        chunk_coords.coords.map(|x| (x * chunk::DIM) as f32)
+                        chunk_coords.unwrap().map(|x| (x * chunk::DIM) as f32)
                     );
 
-                    let model_to_clip = world_to_clip
-                                      * model_to_world.to_homogeneous();
+                    let model_to_clip
+                        = world_to_clip
+                        * model_to_world.to_homogeneous();
 
                     unsafe {
                         gl::UniformMatrix4fv(0, 1, gl::FALSE, model_to_clip.as_ptr());
+                        // TODO don't hardcode texture scale
+                        gl::Uniform1f(1, 1. / 16.);
                     }
 
-                    mesh.draw();
+                    let selected_offset = self.selected_block - chunk_coords.block_mins();
+                    // TODO try_map = transpose . map
+                    let selected = if
+                        (-1 ..= chunk::DIM).contains(&selected_offset.x) &&
+                        (-1 ..= chunk::DIM).contains(&selected_offset.y) &&
+                        (-1 ..= chunk::DIM).contains(&selected_offset.z)
+                    {
+                        Some(selected_offset.map(|x| x as i8))
+                    }
+                    else {
+                        None
+                    };
+
+                    mesh.draw(selected);
                 }
             }
         }

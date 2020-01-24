@@ -7,10 +7,12 @@ mod chunk_maker;
 mod chunk_source;
 mod chunk_store;
 mod game;
+mod halton;
 mod math;
 mod mesher;
 mod shader;
 mod stage;
+mod texture;
 
 use {
     crate::{
@@ -97,6 +99,9 @@ impl App {
 
                 Focused(focused) => {
                     self.focused = *focused;
+                    let win = self.ctx.window();
+                    win.set_cursor_grab(*focused).unwrap();
+                    win.set_cursor_visible(!*focused);
                     eprintln!("focus: {}", self.focused);
                 }
 
@@ -113,6 +118,8 @@ impl App {
                         VK::D        => self.inputs.right = down,
                         VK::Space    => self.inputs.up    = down,
                         VK::LControl => self.inputs.down  = down,
+                        VK::LShift   => self.inputs.fast  = down,
+                        VK::Z        => self.inputs.zoom  = down,
                         _ => { }
                     }
                 }
@@ -178,6 +185,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .with_gl_debug_flag(true)
             .with_depth_buffer(24)
             .with_vsync(true) // TODO figure out interactions on non-wayland systems
+            .with_srgb(true)
             .build_windowed(win_builder, &event_q)?
     };
 
@@ -229,15 +237,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if *win_event == CloseRequested {
                     *flow = ControlFlow::Exit;
                 }
-                else { //if let Some(event) = event.to_static() {
+                else {
                     events.push(event);
                 }
             }
 
             DeviceEvent { .. } => {
-                //if let Some(event) = event.to_static() {
-                    events.push(event);
-                //}
+                events.push(event);
             }
 
             MainEventsCleared => {

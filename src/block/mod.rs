@@ -6,10 +6,14 @@ use {
 pub type Slice   <'a> = array3d::ArraySlice   <'a, Block>;
 pub type SliceMut<'a> = array3d::ArraySliceMut<'a, Block>;
 
+#[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Block {
     Empty,
-    Solid,
+    Stone,
+    Soil,
+    Grass,
+    TreeTrunk,
 }
 
 impl Block {

@@ -266,7 +266,7 @@ impl<'a, T, D> Iterator for IndexedIterMut<'a, T, D> where D: Dims {
         let ijk = self.indices.next()?;
         let index = self.dims.flat_index(ijk);
 
-        let slice = std::mem::replace(&mut self.slice, &mut []);
+        let slice = std::mem::take(&mut self.slice);
         let (_, tail) = slice.split_at_mut(index - self.cursor);
         let (elem, rest) = tail.split_first_mut()?;
 
@@ -327,7 +327,7 @@ impl<D, H> Array<D, H>
 }
 
 impl<T> Array<DynamicDims, Vec<T>> {
-    pub fn generate_with_dims(dims: V3usize, func: impl Fn(V3usize) -> T) -> Self {
+    pub fn generate_with_dims(dims: V3usize, func: impl FnMut(V3usize) -> T) -> Self {
         let hold: Vec<T> = SpaceIter::new(V3usize::zeros(), dims)
             .map(func)
             .collect();
@@ -342,7 +342,7 @@ impl<T> Array<DynamicDims, Vec<T>> {
 }
 
 impl<D, T> Array<D, Vec<T>> where D: StaticDims {
-    pub fn generate(func: impl Fn(V3usize) -> T) -> Self {
+    pub fn generate(func: impl FnMut(V3usize) -> T) -> Self {
         let dims = D::default();
         let hold: Vec<T> = SpaceIter::new(V3usize::zeros(), dims.dims())
             .map(func)

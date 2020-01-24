@@ -12,13 +12,21 @@ pub trait ChunkStore {
 }
 
 pub trait ChunkMaker {
-    fn make(&self, coords: Coords) -> Chunk;
+//  fn make(&self, coords: Coords) -> Chunk;
+    fn make(&self, coords: Coords) -> Vec<(Coords, Chunk)>;
 }
 
 pub struct Source<S, M> {
     cache: Cache<Coords, Chunk>,
     store: S,
     maker: M,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LoadedFrom {
+    Cache,
+    Store,
+    Maker
 }
 
 impl<S, M> Source<S, M> where S: ChunkStore, M: ChunkMaker {
@@ -30,18 +38,23 @@ impl<S, M> Source<S, M> where S: ChunkStore, M: ChunkMaker {
         }
     }
 
-    pub fn load(&mut self, coords: Coords) -> Chunk {
+    pub fn load(&mut self, coords: Coords) -> (Chunk, LoadedFrom) {
         if let Some(chunk) = self.cache.acquire(&coords) {
-            return chunk;
+            return (chunk, LoadedFrom::Cache);
         }
 
-        let chunk = self.store.load(coords)
-            .unwrap_or_else(|| self.maker.make(coords));
+        if let Some(chunk) = self.store.load(coords) {
+            return (chunk, LoadedFrom::Store);
+        }
 
-        //self.cache.insert(coords, chunk);
-        //self.cache.acquire(coords)
-        self.cache.insert_and_acquire(coords);
-        chunk
+        self.maker.make(coords)
+            .drain(..)
+            .for_each(|(coords, chunk)| {
+                self.cache.insert(coords, chunk);
+            });
+
+        let chunk = self.cache.acquire(&coords).unwrap();
+        (chunk, LoadedFrom::Maker)
     }
 
     pub fn store(&mut self, coords: Coords, chunk: Chunk) {
@@ -51,7 +64,7 @@ impl<S, M> Source<S, M> where S: ChunkStore, M: ChunkMaker {
     }
 
     pub fn sync(&mut self) {
-        unimplemented!();
+        todo!();
         //for (coords, chunk) in self.cache.iter_all().unwrap() {
         //    if chunk.touched() { // TODO think
         //        self.store.store(*coords, chunk)
@@ -60,7 +73,7 @@ impl<S, M> Source<S, M> where S: ChunkStore, M: ChunkMaker {
     }
 
     pub fn flush(&mut self) {
-        unimplemented!();
+        todo!();
     }
 }
 

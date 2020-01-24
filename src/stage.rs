@@ -3,32 +3,27 @@ use {
     std::mem,
     crate::{
         array3d,
+        chunk,
         math::*,
     },
 };
 
 struct Element<T> {
-    coords:  P3i32,
+    coords:  chunk::Coords,
     content: Option<T>
 }
 
 pub struct Stage<T> {
-//  dim:      i32,
-//  elements: Box<[Element<T>]>,
-//  centre:   P3i32,
     array:  array3d::ArrayOwned<Element<T>, array3d::DynamicDims>,
-    center: P3i32,
+    center: chunk::Coords,
 }
-
-//type Slice   <'a, T> = array3d::ArraySlice   <'a, Element<T>>;
-//type SliceMut<'a, T> = array3d::ArraySliceMut<'a, Element<T>>;
 
 impl<T> Stage<T> {
     pub fn dims(&self) -> V3usize {
         self.array.dims()
     }
 
-    pub fn new(radius: i32, center: P3i32) -> Stage<T> {
+    pub fn new(radius: i32, center: chunk::Coords) -> Stage<T> {
         let offset = V3::repeat(radius);
         let dims = V3::repeat(radius as usize * 2);
         let array = array3d::Array::generate_with_dims(
@@ -52,11 +47,11 @@ impl<T> Stage<T> {
             .map(|x| 1 + (x as i32 / 2))
     }
 
-    pub fn relative_to_absolute(&self, rel: V3i32) -> P3i32 {
+    pub fn relative_to_absolute(&self, rel: V3i32) -> chunk::Coords {
         self.center + rel
     }
 
-    pub fn absolute_to_relative(&self, abs: P3i32) -> V3i32 {
+    pub fn absolute_to_relative(&self, abs: chunk::Coords) -> V3i32 {
         abs - self.center
     }
 
@@ -64,7 +59,7 @@ impl<T> Stage<T> {
         SpaceIter::new(self.relative_mins(), self.relative_maxs())
     }
 
-    pub fn absolute_coords_iter(&self) -> impl Iterator<Item = P3i32> {
+    pub fn absolute_coords_iter(&self) -> impl Iterator<Item = chunk::Coords> {
         let center = self.center;
         self.relative_coords_iter()
             .map(move |rel| center + rel)
@@ -75,36 +70,36 @@ impl<T> Stage<T> {
         if rel.x < mins.x || rel.y < mins.y || rel.z < mins.z { return None; }
         let maxs = self.relative_maxs();
         if rel.x >= maxs.x || rel.y >= maxs.y || rel.z >= maxs.z { return None; }
-        let abs = self.center.coords + rel;
-        let ijk = abs.zip_map(
+        let abs = self.center + rel;
+        let ijk = abs.unwrap().zip_map(
             &self.dims(),
             |x, dim| x.rem_euclid(dim as i32) as usize
         );
         Some(ijk)
     }
 
-    fn abs_to_ijk(&self, abs: P3i32) -> Option<V3usize> {
+    fn abs_to_ijk(&self, abs: chunk::Coords) -> Option<V3usize> {
         self.rel_to_ijk(abs - self.center)
     }
 
-    fn elem_abs(&self, abs: P3i32) -> Option<&Element<T>> {
+    fn elem_abs(&self, abs: chunk::Coords) -> Option<&Element<T>> {
         let elem = self.array.get(self.abs_to_ijk(abs)?);
         if elem.coords == abs { Some(elem) }
         else                  { None }
     }
 
-    fn elem_abs_mut(&mut self, abs: P3i32) -> Option<&mut Element<T>> {
+    fn elem_abs_mut(&mut self, abs: chunk::Coords) -> Option<&mut Element<T>> {
         let elem = self.array.get_mut(self.abs_to_ijk(abs)?);
         if elem.coords == abs { Some(elem) }
         else                  { None }
     }
 
-    pub fn at_absolute(&self, abs: P3i32) -> Option<&T> {
+    pub fn at_absolute(&self, abs: chunk::Coords) -> Option<&T> {
         self.elem_abs(abs)
             .and_then(|elem| elem.content.as_ref())
     }
 
-    pub fn at_absolute_mut(&mut self, abs: P3i32) -> Option<&mut T> {
+    pub fn at_absolute_mut(&mut self, abs: chunk::Coords) -> Option<&mut T> {
         self.elem_abs_mut(abs)
             .and_then(|elem| elem.content.as_mut())
     }
@@ -117,7 +112,7 @@ impl<T> Stage<T> {
         self.at_absolute_mut(self.center + rel)
     }
 
-    pub fn insert_absolute(&mut self, abs: P3i32, content: T) -> Option<T> {
+    pub fn insert_absolute(&mut self, abs: chunk::Coords, content: T) -> Option<T> {
         let element = self.array.get_mut(self.abs_to_ijk(abs)?);
         let new_element = Element { coords: abs, content: Some(content) };
         mem::replace(element, new_element).content
@@ -127,7 +122,7 @@ impl<T> Stage<T> {
         self.insert_absolute(self.center + rel, content)
     }
 
-    pub fn relocate(&mut self, new_center: P3i32) -> Vec<StaleChunk<T>> {
+    pub fn relocate(&mut self, new_center: chunk::Coords) -> Vec<StaleChunk<T>> {
         self.center = new_center;
 
         let mut stale = Vec::new();
@@ -152,10 +147,10 @@ impl<T> Stage<T> {
 }
 
 pub enum StaleChunk<T> {
-    Missing(P3i32),
+    Missing(chunk::Coords),
     Evicted {
-        old_coords: P3i32,
-        new_coords: P3i32,
+        old_coords: chunk::Coords,
+        new_coords: chunk::Coords,
         value:      T
     },
 }
