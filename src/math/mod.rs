@@ -2,7 +2,37 @@
 pub mod iter;
 pub use iter::*;
 
+pub mod linear;
+pub use linear::*;
+
+pub mod planar;
+pub use planar::Plane;
+
+pub mod box3;
+pub use box3::Box3;
+
 pub use nalgebra as na;
+
+pub trait Intersect<With> {
+    type Intersection;
+    fn intersect(&self, other: &With) -> Option<Self::Intersection>;
+}
+
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
+pub struct OrdFloat<T> (pub T) where T: PartialOrd + PartialEq;
+
+impl<T> Eq for OrdFloat<T> where T: PartialOrd + PartialEq { }
+
+impl<T> OrdFloat<T> where T: PartialOrd + PartialEq {
+    fn unwrap(self) -> T { self.0 }
+}
+
+impl<T> std::cmp::Ord for OrdFloat<T> where T: PartialOrd + PartialEq {
+    fn cmp(&self, rhs: &Self) -> std::cmp::Ordering {
+        self.0.partial_cmp(&rhs.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
 
 pub type V2<T = f32> = na::Vector2<T>;
 pub type V3<T = f32> = na::Vector3<T>;

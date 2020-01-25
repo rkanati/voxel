@@ -21,6 +21,7 @@ const FOV: f32 = 90.;
 const ZOOM_FACTOR: f32 = 5.;
 
 const SPRINT_FACTOR: f32 = 3.;
+const PLAYER_SPEED: f32 = 5.;
 
 #[derive(Clone)]
 struct StageChunk {
@@ -193,6 +194,31 @@ pub struct Game {
     selected_block:  BlockCoords,
 }
 
+fn clip_against_chunk(chunk_coords: ChunkCoords, chunk: &Chunk, hitbox: Box3, motion: Segment)
+    -> Option<f32>
+{
+    let chunk_pos = chunk_coords.block_mins().unwrap_f32().into();
+    let chunk_box = Box3::with_dims(chunk_pos, V3::repeat(chunk::DIM as f32))
+        .dilate(&hitbox);
+
+    // TODO simplify check when source-inside-box intersections work
+    if !chunk_box.contains(motion.source()) && chunk_box.intersect(&motion).is_none() {
+        return None;
+    }
+
+    let block_box = Box3::with_dims(chunk_pos, V3::repeat(1.))
+        .dilate(&hitbox);
+
+    chunk.indexed_iter()
+        .filter_map(|(ijk, block)| {
+            if *block == Block::Empty { return None; }
+            block_box.at(ijk.map(|x| x as f32).into())
+                .intersect(&motion)
+        })
+        .min_by_key(|ixn| OrdFloat(ixn.lambda))
+        .map(|ixn| ixn.lambda)
+}
+
 impl Game {
     pub fn new() -> Result<Game, Box<dyn std::error::Error>> {
         let source = ChunkSource::new(
@@ -240,7 +266,7 @@ impl Game {
         //  shader,
             atlas,
 
-            player_position: P3::origin(),
+            player_position: P3::new(0., 0., 30.),
             player_facing:   Facing::new(),
             zoom:            false,
 
@@ -258,27 +284,7 @@ impl Game {
         //    .into()
     }
 
-    pub fn tick(&mut self, inputs: &Inputs, dt: f32) {
-        const MOUSE_SPEED: f32 = 0.005;
-        let mouse_speed = MOUSE_SPEED * if inputs.zoom { 1. / ZOOM_FACTOR } else { 1. };
-        self.player_facing.update(
-            inputs.cam_delta.y * mouse_speed,
-            inputs.cam_delta.x * mouse_speed,
-        );
-
-        let player_move = {
-            let move_fore = self.player_facing.flat();
-            let move_right = V2::new(move_fore.y, -move_fore.x);
-
-            (inputs.fore  as i32 - inputs.back as i32) as f32 * move_fore.push(0.) +
-            (inputs.right as i32 - inputs.left as i32) as f32 * move_right.push(0.) +
-            (inputs.up    as i32 - inputs.down as i32) as f32 * V3::z()
-        };
-
-        const SPEED: f32 = 5.;
-        let speed = SPEED * if inputs.fast { SPRINT_FACTOR } else { 1. };
-        self.player_position += dt * speed * player_move;
-
+    fn update_chunks(&mut self) {
         let stale_chunks = self.stage.relocate(self.player_chunk_coords());
         if !stale_chunks.is_empty() {
             //eprintln!("loading {} stale chunks...", stale_chunks.len());
@@ -307,8 +313,10 @@ impl Game {
                 }
             }
         }
+    }
 
-        let selected_position = self.player_position + self.player_facing.direction() * 3.;
+    pub fn edit_blocks(&mut self, inputs: &Inputs) {
+        let selected_position = self.eye_position() + self.player_facing.direction() * 3.;
         self.selected_block = BlockCoords::containing(selected_position);
         let (selected_chunk, selected_offset) = self.selected_block.chunk_and_offset();
 
@@ -340,6 +348,55 @@ impl Game {
                 }
             }
         }
+    }
+
+    fn move_player(&mut self, inputs: &Inputs, dt: f32) {
+        let move_intent = {
+            let move_fore = self.player_facing.flat();
+            let move_right = V2::new(move_fore.y, -move_fore.x);
+
+            (inputs.fore  as i32 - inputs.back as i32) as f32 * move_fore.push(0.) +
+            (inputs.right as i32 - inputs.left as i32) as f32 * move_right.push(0.) +
+            (inputs.up    as i32 - inputs.down as i32) as f32 * V3::z()
+        };
+
+        let speed = PLAYER_SPEED * if inputs.fast { SPRINT_FACTOR } else { 1. };
+        let stride = dt * speed * move_intent;
+        let motion = Segment::new(self.player_position, stride);
+
+        let player_box = Box3::with_dims(P3::new(-0.4, -0.4, 0.0), V3::new(0.8, 0.8, 1.6));
+
+        // TODO test a more sensible set of chunks/blocks
+        let mut nearest_hit = 1.0_f32;
+        for rel in SpaceIter::new(V3::repeat(-1), V3::repeat(2)) {
+            let chunk = if let Some(chunk) = self.stage.at_relative(rel) {
+                &chunk.chunk
+            }
+            else {
+                // TODO improve behaviour when nearby chunks are not loaded
+                return;
+            };
+
+            let coords = self.stage.relative_to_absolute(rel);
+            if let Some(param) = clip_against_chunk(coords, chunk, player_box, motion) {
+                nearest_hit = nearest_hit.min(param).max(0.);
+            }
+        }
+
+        self.player_position += nearest_hit * stride;
+    }
+
+    pub fn tick(&mut self, inputs: &Inputs, dt: f32) {
+        const MOUSE_SPEED: f32 = 0.005;
+        let mouse_speed = MOUSE_SPEED * if inputs.zoom { 1. / ZOOM_FACTOR } else { 1. };
+        self.player_facing.update(
+            inputs.cam_delta.y * mouse_speed,
+            inputs.cam_delta.x * mouse_speed,
+        );
+
+        self.move_player(inputs, dt);
+        self.update_chunks();
+        self.edit_blocks(inputs);
 
         self.zoom = inputs.zoom;
     }
@@ -368,6 +425,10 @@ impl Game {
         }
     }
 
+    fn eye_position(&self) -> P3 {
+        self.player_position + 1.5f32 * V3::z()
+    }
+
     pub fn draw(&mut self, screen_dims: V2) {
         self.refresh_meshes();
 
@@ -376,9 +437,11 @@ impl Game {
         let fov = FOV * if self.zoom { 1. / ZOOM_FACTOR } else { 1. };
         let view_to_clip = Perspective::new(aspect, fov * (PI / 180.0), 0.1, 1000.0);
 
+        let eye_position = self.eye_position();
+
         let world_to_view = Motion::look_at_rh(
-            &self.player_position,
-            &(self.player_position + self.player_facing.direction()),
+            &eye_position,
+            &(eye_position + self.player_facing.direction()),
             &V3::z()
         ).to_homogeneous();
 

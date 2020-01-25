@@ -64,6 +64,14 @@ impl BlockCoords {
         BlockCoords(point.coords)
     }
 
+    pub fn unwrap(self) -> V3i32 {
+        self.0
+    }
+
+    pub fn unwrap_f32(self) -> V3 {
+        self.0.map(|x| x as f32)
+    }
+
     pub fn origin() -> BlockCoords {
         BlockCoords(V3::zeros())
     }
