@@ -195,7 +195,7 @@ pub struct Game {
 }
 
 fn clip_against_chunk(chunk_coords: ChunkCoords, chunk: &Chunk, hitbox: Box3, motion: Segment)
-    -> Option<f32>
+    -> Option<box3::Intersection>
 {
     let chunk_pos = chunk_coords.block_mins().unwrap_f32().into();
     let chunk_box = Box3::with_dims(chunk_pos, V3::repeat(chunk::DIM as f32))
@@ -216,7 +216,6 @@ fn clip_against_chunk(chunk_coords: ChunkCoords, chunk: &Chunk, hitbox: Box3, mo
                 .intersect(&motion)
         })
         .min_by_key(|ixn| OrdFloat(ixn.lambda))
-        .map(|ixn| ixn.lambda)
 }
 
 impl Game {
@@ -361,29 +360,44 @@ impl Game {
         };
 
         let speed = PLAYER_SPEED * if inputs.fast { SPRINT_FACTOR } else { 1. };
-        let stride = dt * speed * move_intent;
-        let motion = Segment::new(self.player_position, stride);
 
         let player_box = Box3::with_dims(P3::new(-0.4, -0.4, 0.0), V3::new(0.8, 0.8, 1.6));
 
-        // TODO test a more sensible set of chunks/blocks
-        let mut nearest_hit = 1.0_f32;
-        for rel in SpaceIter::new(V3::repeat(-1), V3::repeat(2)) {
-            let chunk = if let Some(chunk) = self.stage.at_relative(rel) {
-                &chunk.chunk
+        let mut remaining = 1.;
+        let mut stride = dt * speed * move_intent;
+
+        while remaining > 0. {
+            // TODO test a more sensible set of chunks/blocks
+            let mut nearest_hit: Option<box3::Intersection> = None;
+            for rel in SpaceIter::new(V3::repeat(-1), V3::repeat(2)) {
+                let chunk = if let Some(chunk) = self.stage.at_relative(rel) {
+                    &chunk.chunk
+                }
+                else {
+                    // TODO improve behaviour when nearby chunks are not loaded
+                    return;
+                };
+
+                let coords = self.stage.relative_to_absolute(rel);
+                let motion = Segment::new(self.player_position, stride);
+                if let Some(ixn) = clip_against_chunk(coords, chunk, player_box, motion) {
+                    if ixn.lambda < nearest_hit.map(|nh| nh.lambda).unwrap_or(remaining) {
+                        nearest_hit = Some(ixn)
+                    }
+                }
+            }
+
+            if let Some(hit) = nearest_hit {
+                dbg!(hit.normal);
+                self.player_position += hit.lambda * stride;
+                remaining -= hit.lambda;
+                stride += hit.normal * -hit.normal.dot(&stride);
             }
             else {
-                // TODO improve behaviour when nearby chunks are not loaded
-                return;
-            };
-
-            let coords = self.stage.relative_to_absolute(rel);
-            if let Some(param) = clip_against_chunk(coords, chunk, player_box, motion) {
-                nearest_hit = nearest_hit.min(param).max(0.);
+                self.player_position += stride;
+                break;
             }
         }
-
-        self.player_position += nearest_hit * stride;
     }
 
     pub fn tick(&mut self, inputs: &Inputs, dt: f32) {

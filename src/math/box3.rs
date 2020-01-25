@@ -43,9 +43,11 @@ impl Box3 {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Intersection {
     pub lambda: f32,
     pub point:  P3,
+    pub normal: V3,
 }
 
 impl<L> Intersect<L> for Box3 where L: Linear {
@@ -66,6 +68,17 @@ impl<L> Intersect<L> for Box3 where L: Linear {
         let tmin = tx1.min(tx2).max(ty1.min(ty2)).max(tz1.min(tz2));
         let tmax = tx1.max(tx2).min(ty1.max(ty2)).min(tz1.max(tz2));
 
+        // TODO check correctness
+        let normal = match tmin {
+            t if t == tx1 => -V3::x(),
+            t if t == tx2 =>  V3::x(),
+            t if t == ty1 => -V3::y(),
+            t if t == ty2 =>  V3::y(),
+            t if t == tz1 => -V3::z(),
+            t if t == tz2 =>  V3::z(),
+            _ => unreachable!()
+        };
+
         // TODO deal with intersections when source is inside box
         if tmax <= tmin || !other.parameter_on(tmin) {
             return None;
@@ -74,7 +87,7 @@ impl<L> Intersect<L> for Box3 where L: Linear {
         let lambda = tmin;
         let point = other.at(tmin);
 
-        Some(Intersection { lambda, point })
+        Some(Intersection { lambda, point, normal })
     }
 }
 
