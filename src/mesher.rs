@@ -1,15 +1,15 @@
 
 use {
     crate::{
-        math::*,
+        gl::{self, types::*},
         block::{self, Block},
+        math::*,
     },
     std::{
         mem,
         ptr::null as nullptr,
         rc::Rc,
     },
-    gl::types::*,
     rgb,
 };
 
@@ -291,10 +291,10 @@ impl Mesh for InstancedQuadMesh {
         self.vao.bind();
         unsafe {
             if let Some(selected) = selected {
-                gl::Uniform3i(2, selected.x as i32, selected.y as i32, selected.z as i32);
+                gl::Uniform3i(1, selected.x as i32, selected.y as i32, selected.z as i32);
             }
             else {
-                gl::Uniform3i(2, 127, 127, 127);
+                gl::Uniform3i(1, 127, 127, 127);
             }
             gl::DrawArraysInstanced(gl::TRIANGLE_FAN, 0, 4, self.n_quads as i32);
         }

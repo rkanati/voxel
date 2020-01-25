@@ -1,11 +1,11 @@
 
 use {
+    crate::gl::{self, types::*},
     std::{
         error,
         fmt,
         ptr,
     },
-    gl::types::*,
 };
 
 pub enum Stage { Vertex, Fragment }

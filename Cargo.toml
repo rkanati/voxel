@@ -3,6 +3,7 @@ name = "rk-voxel"
 version = "0.1.0"
 authors = ["Rachel K <raech.kanati@gmail.com>"]
 edition = "2018"
+build = "build.rs"
 
 [profile.dev]
 opt-level = 1
@@ -17,13 +18,14 @@ codegen-units = 1
 debug = false
 panic = "abort"
 
+[build-dependencies]
+gl_generator = "0.14"
+
 [dependencies]
-glutin            = "0.22"
-gl                = "0.14"
-num-complex       = "0.2"
-rgb               = "0.8"
-#static_assertions = "1.1"
-#alga              = "0.9"
+glutin      = "0.22"
+#gl         = "0.14"
+num-complex = "0.2"
+rgb         = "0.8"
 
 [dependencies.nalgebra]
 version = "0.19"

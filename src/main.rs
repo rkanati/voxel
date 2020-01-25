@@ -7,6 +7,7 @@ mod chunk_maker;
 mod chunk_source;
 mod chunk_store;
 mod game;
+mod gl;
 mod halton;
 mod math;
 mod mesher;
@@ -16,6 +17,7 @@ mod texture;
 
 use {
     crate::{
+        gl::types::*,
         math::*,
     },
     std::{
@@ -31,7 +33,6 @@ use {
         event_loop::{ControlFlow, EventLoop},
         platform::unix::EventLoopWindowTargetExtUnix,
     },
-    gl::types::*,
 };
 
 type Event<'w> = event::Event<'w, ()>;
@@ -128,8 +129,8 @@ impl App {
                     let down = *state == event::ElementState::Pressed;
                     use event::MouseButton::*;
                     match button {
-                        Left  => self.inputs.build = down,
-                        Right => self.inputs.smash = down,
+                        Left  => self.inputs.smash = down,
+                        Right => self.inputs.build = down,
                         _     => { }
                     }
                 }

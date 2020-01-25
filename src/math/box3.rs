@@ -57,29 +57,27 @@ impl<L> Intersect<L> for Box3 where L: Linear {
         let p = other.source();
         let rs = other.stride().map(|x| 1. / x);
 
-        let tx1 = (self.mins.x - p.x) * rs.x;
-        let tx2 = (self.maxs.x - p.x) * rs.x;
-        let ty1 = (self.mins.y - p.y) * rs.y;
-        let ty2 = (self.maxs.y - p.y) * rs.y;
-        let tz1 = (self.mins.z - p.z) * rs.z;
-        let tz2 = (self.maxs.z - p.z) * rs.z;
+        let pmins = (self.mins - p).component_mul(&rs);
+        let pmaxs = (self.maxs - p).component_mul(&rs);
 
-        // sigh
-        let tmin = tx1.min(tx2).max(ty1.min(ty2)).max(tz1.min(tz2));
-        let tmax = tx1.max(tx2).min(ty1.max(ty2)).min(tz1.max(tz2));
+        let tmins = pmins.zip_map(&pmaxs, |a, b| a.min(b));
+        let tmaxs = pmins.zip_map(&pmaxs, |a, b| a.max(b));
+
+        let tmin = tmins.max();
+        let tmax = tmaxs.min();
 
         // TODO check correctness
         let normal = match tmin {
-            t if t == tx1 => -V3::x(),
-            t if t == tx2 =>  V3::x(),
-            t if t == ty1 => -V3::y(),
-            t if t == ty2 =>  V3::y(),
-            t if t == tz1 => -V3::z(),
-            t if t == tz2 =>  V3::z(),
+            t if t == pmins.x => -V3::x(),
+            t if t == pmaxs.x =>  V3::x(),
+            t if t == pmins.y => -V3::y(),
+            t if t == pmaxs.y =>  V3::y(),
+            t if t == pmins.z => -V3::z(),
+            t if t == pmaxs.z =>  V3::z(),
             _ => unreachable!()
         };
 
-        // TODO deal with intersections when source is inside box
+        // TODO deal with ntersections when source is inside box
         if tmax <= tmin || !other.parameter_on(tmin) {
             return None;
         }
@@ -101,6 +99,12 @@ mod tests {
 
         // through the middle
         b.intersect(&Segment::new(P3::new(-2., 0., 0.), V3::new(2., 0., 0.)))
+            .map(|ixn| assert_eq!(ixn.normal, V3::new(-1., 0., 0.)))
+            .unwrap();
+
+        // through the middle
+        b.intersect(&Segment::new(P3::new(0., 0., 2.), V3::new(0., 0., -3.)))
+            .map(|ixn| assert_eq!(ixn.normal, V3::new(0., 0., 1.)))
             .unwrap();
 
         // through an edge
@@ -129,6 +133,7 @@ mod tests {
 
         // grazing an edge
         b.intersect(&Segment::new(P3::new(-1.8, 0., 0.), V3::new(2., 2., 0.)))
+            .map(|ixn| assert_eq!(ixn.normal, V3::new(-1., 0., 0.)))
             .unwrap();
     }
 

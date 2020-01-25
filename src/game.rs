@@ -6,11 +6,12 @@ use {
         chunk_maker,
         chunk_source,
         chunk_store,
+        gl,
         math::*,
         mesher,
         shader,
         stage,
-        texture::Texture2D,
+        texture::TextureAtlas,
     },
     std::rc::Rc,
 };
@@ -20,7 +21,7 @@ const STAGE_RADIUS: i32 = 10;
 const FOV: f32 = 90.;
 const ZOOM_FACTOR: f32 = 5.;
 
-const SPRINT_FACTOR: f32 = 3.;
+const SPRINT_FACTOR: f32 = 2.;
 const PLAYER_SPEED: f32 = 5.;
 
 const EDIT_INTERVAL: f32 = 0.1;
@@ -187,7 +188,7 @@ pub struct Game {
     stage:    Stage,
     mesher:   Box<MesherFn>,
     mesh_buf: MeshingBuffer,
-    atlas:    Texture2D,
+    atlas:    TextureAtlas,
 
     player_position: P3,
     player_facing:   Facing,
@@ -262,7 +263,7 @@ impl Game {
             shader::link(&[v_shader, f_shader])?
         };
 
-        let atlas = Texture2D::load("atlas.png")?;
+        let atlas = TextureAtlas::load("atlas.png", V2::new(16, 16), 5)?;
 
         unsafe {
             shader.bind();
@@ -456,6 +457,7 @@ impl Game {
 
             if let Some((_, hit)) = nearest_hit {
                 dbg!(hit.normal);
+                //dbg!(hit.lambda);
                 self.player_position += hit.lambda * stride;
                 remaining *= 1. - hit.lambda;
                 stride += hit.normal * -hit.normal.dot(&stride);
@@ -550,8 +552,10 @@ impl Game {
 
                     unsafe {
                         gl::UniformMatrix4fv(0, 1, gl::FALSE, model_to_clip.as_ptr());
-                        // TODO don't hardcode texture scale
-                        gl::Uniform1f(1, 1. / 16.);
+
+                        gl::Uniform2fv(2, 1, self.atlas.tile_dims().as_ptr() as *const _);
+                        gl::Uniform2fv(3, 1, self.atlas.padding().as_ptr() as *const _);
+                        gl::Uniform2fv(4, 1, self.atlas.stride().as_ptr() as *const _);
                     }
 
                     let selected_offset = self.selected_block - chunk_coords.block_mins();

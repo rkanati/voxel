@@ -1,8 +1,11 @@
 #version 450
 
 layout(location = 0) uniform mat4 model_to_clip;
-layout(location = 1) uniform float tex_scale;
-layout(location = 2) uniform ivec3 selected;
+layout(location = 1) uniform ivec3 selected;
+
+layout(location = 2) uniform vec2 tex_tile_dims;
+layout(location = 3) uniform vec2 tex_padding;
+layout(location = 4) uniform vec2 tex_stride;
 
 layout(location = 0) in ivec4 attr_pos_dir;
 layout(location = 1) in  vec4 attr_color;
@@ -46,9 +49,12 @@ void main() {
 
     int tc_rotate = attr_rotate_.x;
     int tc_index = (gl_VertexID + tc_rotate) & 3;
-    vec2 offs = vec2(TEX_OFFSETS[dir][tc_index]);
-    tcoords = tex_scale * (attr_tcoords + vec2(offs.x, 1.0 - offs.y));
-    quad_coords = offs;
+    vec2 quad_offs = vec2(TEX_OFFSETS[dir][tc_index]);
+    vec2 offs = tex_tile_dims * vec2(quad_offs.x, 1.0 - quad_offs.y);
+    tcoords = tex_padding
+            + attr_tcoords * tex_stride
+            + offs;
+    quad_coords = quad_offs;
 
     if (pos == selected) {
         select = 1.0;
