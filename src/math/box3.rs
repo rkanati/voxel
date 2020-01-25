@@ -26,12 +26,12 @@ impl Box3 {
         Self::new_unchecked(mins, mins + dims)
     }
 
-    // FIXME uuuh
+    #[must_use]
     pub fn dilate(&self, with: &Box3) -> Box3 {
-        //Self::new_unchecked(self.mins + with.mins.coords, self.maxs + with.maxs.coords)
         Self::new_unchecked(self.mins - with.maxs.coords, self.maxs - with.mins.coords)
     }
 
+    #[must_use]
     pub fn at(&self, point: P3) -> Box3 {
         Self::new_unchecked(self.mins + point.coords, self.maxs + point.coords)
     }

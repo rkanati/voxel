@@ -23,6 +23,8 @@ const ZOOM_FACTOR: f32 = 5.;
 const SPRINT_FACTOR: f32 = 3.;
 const PLAYER_SPEED: f32 = 5.;
 
+const EDIT_INTERVAL: f32 = 0.1;
+
 #[derive(Clone)]
 struct StageChunk {
     chunk: Chunk,
@@ -173,8 +175,8 @@ impl Facing {
         self.cached.set(None);
 
         self.pitch = (self.pitch - d_pitch)
-            .min(PI *  0.45)
-            .max(PI * -0.45);
+            .min(PI *  0.47)
+            .max(PI * -0.47);
 
         self.yaw *= Complex::from_polar(&1., &(-0.5 * d_yaw));
     }
@@ -191,31 +193,45 @@ pub struct Game {
     player_facing:   Facing,
     zoom:            bool,
 
-    selected_block:  BlockCoords,
+    selected_block: BlockCoords,
+    edit_timer:     f32,
 }
 
-fn clip_against_chunk(chunk_coords: ChunkCoords, chunk: &Chunk, hitbox: Box3, motion: Segment)
-    -> Option<box3::Intersection>
+fn chunk_clip(
+    coords: ChunkCoords,
+    chunk:  &Chunk,
+    hitbox: Option<Box3>,
+    motion: Segment)
+    -> Option<(BlockCoords, box3::Intersection)>
 {
-    let chunk_pos = chunk_coords.block_mins().unwrap_f32().into();
-    let chunk_box = Box3::with_dims(chunk_pos, V3::repeat(chunk::DIM as f32))
-        .dilate(&hitbox);
+    let chunk_pos = coords.block_mins().unwrap_f32().into();
+
+    // TODO this works, but stinks
+    let chunk_box = {
+        let b = Box3::with_dims(chunk_pos, V3::repeat(chunk::DIM as f32));
+        if let Some(hitbox) = &hitbox { b.dilate(hitbox) }
+        else                          { b }
+    };
 
     // TODO simplify check when source-inside-box intersections work
     if !chunk_box.contains(motion.source()) && chunk_box.intersect(&motion).is_none() {
         return None;
     }
 
-    let block_box = Box3::with_dims(chunk_pos, V3::repeat(1.))
-        .dilate(&hitbox);
+    let block_box = {
+        let b = Box3::with_dims(chunk_pos, V3::repeat(1.));
+        if let Some(hitbox) = &hitbox { b.dilate(hitbox) }
+        else                          { b }
+    };
 
     chunk.indexed_iter()
         .filter_map(|(ijk, block)| {
             if *block == Block::Empty { return None; }
             block_box.at(ijk.map(|x| x as f32).into())
                 .intersect(&motion)
+                .map(|ixn| (coords.block_at_offset(ijk.map(|x| x as u8)), ixn))
         })
-        .min_by_key(|ixn| OrdFloat(ixn.lambda))
+        .min_by_key(|(_, ixn)| OrdFloat(ixn.lambda))
 }
 
 impl Game {
@@ -270,6 +286,7 @@ impl Game {
             zoom:            false,
 
             selected_block: BlockCoords::origin(),
+            edit_timer:     EDIT_INTERVAL,
         };
 
         Ok(game)
@@ -314,39 +331,106 @@ impl Game {
         }
     }
 
-    pub fn edit_blocks(&mut self, inputs: &Inputs) {
-        let selected_position = self.eye_position() + self.player_facing.direction() * 3.;
-        self.selected_block = BlockCoords::containing(selected_position);
-        let (selected_chunk, selected_offset) = self.selected_block.chunk_and_offset();
+    pub fn edit_blocks(&mut self, inputs: &Inputs, dt: f32) {
+        let selection_beam = Segment::new(
+            self.eye_position(),
+            self.player_facing.direction() * 4.
+        );
 
-        if inputs.build != inputs.smash {
-            if let Some(chunk) = self.stage.at_absolute_mut(selected_chunk) {
-                chunk.chunk[selected_offset] =
-                    if inputs.build { Block::Stone }
-                    else            { Block::Empty };
+        let selection = self.world_clip(None, selection_beam);
 
-                // TODO proper mesh invalidation
-                chunk.mesh = None;
+        let (kill_block, build_block) = if let Some((block, hit)) = selection {
+            let build_block = block + hit.normal.map(|x| x as i32);
+            (block, build_block)
+        }
+        else {
+            let block = BlockCoords::containing(selection_beam.destination());
+            (block, block)
+        };
 
-                if selected_offset.x == 0 {
-                    if let Some(chunk) = self.stage.at_absolute_mut(selected_chunk - V3::x()) {
-                        chunk.mesh = None;
-                    }
+        self.selected_block = kill_block;
+
+        // TODO actual click detection
+        if self.edit_timer > 0. {
+            self.edit_timer -= dt;
+            return;
+        }
+
+        if inputs.build == inputs.smash {
+            return;
+        }
+
+        let (value, coords, offset) = if inputs.build {
+            let player_block = BlockCoords::containing(self.player_position);
+            let offset = build_block - player_block;
+            if offset.xy() == V2::zeros() && (0..=1).contains(&offset.z) {
+                // don't concrete over your own feet
+                return;
+            }
+
+            let (coords, offset) = build_block.chunk_and_offset();
+            (Block::Stone, coords, offset)
+        }
+        else {
+            let (coords, offset) = kill_block.chunk_and_offset();
+            (Block::Empty, coords, offset)
+        };
+
+        if let Some(chunk) = self.stage.at_absolute_mut(coords) {
+            chunk.chunk[offset] = value;
+
+            // TODO proper mesh invalidation
+            chunk.mesh = None;
+
+            if offset.x == 0 {
+                if let Some(chunk) = self.stage.at_absolute_mut(coords - V3::x()) {
+                    chunk.mesh = None;
                 }
+            }
 
-                if selected_offset.y == 0 {
-                    if let Some(chunk) = self.stage.at_absolute_mut(selected_chunk - V3::y()) {
-                        chunk.mesh = None;
-                    }
+            if offset.y == 0 {
+                if let Some(chunk) = self.stage.at_absolute_mut(coords - V3::y()) {
+                    chunk.mesh = None;
                 }
+            }
 
-                if selected_offset.z == 0 {
-                    if let Some(chunk) = self.stage.at_absolute_mut(selected_chunk - V3::z()) {
-                        chunk.mesh = None;
-                    }
+            if offset.z == 0 {
+                if let Some(chunk) = self.stage.at_absolute_mut(coords - V3::z()) {
+                    chunk.mesh = None;
                 }
             }
         }
+
+        self.edit_timer = EDIT_INTERVAL;
+    }
+
+    fn world_clip(&self, hitbox: Option<Box3>, segment: Segment)
+        -> Option<(BlockCoords, box3::Intersection)>
+    {
+        let mins = ChunkCoords::containing(segment.source()) - V3::repeat(1);
+        let maxs = ChunkCoords::containing(segment.destination()) + V3::repeat(2);
+        let range = SpaceIter::new(mins.unwrap(), maxs.unwrap());
+
+        // TODO test a more sensible set of chunks/blocks
+        let mut nearest_hit: Option<(BlockCoords, box3::Intersection)> = None;
+        for coords in range.map(|coords| ChunkCoords::new(coords.into())) {
+            let chunk = if let Some(chunk) = self.stage.at_absolute(coords) {
+                &chunk.chunk
+            }
+            else {
+                // TODO improve behaviour when nearby chunks are not loaded
+                //      should probably be an error
+                return None;
+            };
+
+            if let Some((block, ixn)) = chunk_clip(coords, chunk, hitbox, segment) {
+                if ixn.lambda < nearest_hit.map(|(_, nh)| nh.lambda).unwrap_or(std::f32::INFINITY) {
+                    nearest_hit = Some((block, ixn));
+                }
+            }
+        }
+
+        nearest_hit
     }
 
     fn move_player(&mut self, inputs: &Inputs, dt: f32) {
@@ -367,30 +451,13 @@ impl Game {
         let mut stride = dt * speed * move_intent;
 
         while remaining > 0. {
-            // TODO test a more sensible set of chunks/blocks
-            let mut nearest_hit: Option<box3::Intersection> = None;
-            for rel in SpaceIter::new(V3::repeat(-1), V3::repeat(2)) {
-                let chunk = if let Some(chunk) = self.stage.at_relative(rel) {
-                    &chunk.chunk
-                }
-                else {
-                    // TODO improve behaviour when nearby chunks are not loaded
-                    return;
-                };
+            let motion = Segment::new(self.player_position, stride);
+            let nearest_hit = self.world_clip(Some(player_box), motion);
 
-                let coords = self.stage.relative_to_absolute(rel);
-                let motion = Segment::new(self.player_position, stride);
-                if let Some(ixn) = clip_against_chunk(coords, chunk, player_box, motion) {
-                    if ixn.lambda < nearest_hit.map(|nh| nh.lambda).unwrap_or(remaining) {
-                        nearest_hit = Some(ixn)
-                    }
-                }
-            }
-
-            if let Some(hit) = nearest_hit {
+            if let Some((_, hit)) = nearest_hit {
                 dbg!(hit.normal);
                 self.player_position += hit.lambda * stride;
-                remaining -= hit.lambda;
+                remaining *= 1. - hit.lambda;
                 stride += hit.normal * -hit.normal.dot(&stride);
             }
             else {
@@ -410,7 +477,7 @@ impl Game {
 
         self.move_player(inputs, dt);
         self.update_chunks();
-        self.edit_blocks(inputs);
+        self.edit_blocks(inputs, dt);
 
         self.zoom = inputs.zoom;
     }

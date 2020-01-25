@@ -28,6 +28,10 @@ impl Coords {
     pub fn block_at_offset(&self, offset: V3u8) -> BlockCoords {
         self.block_mins() + offset.map(|x| x as i32)
     }
+
+    pub fn containing(point: P3) -> Coords {
+        BlockCoords::containing(point).chunk()
+    }
 }
 
 impl std::ops::Add<V3i32> for Coords {
